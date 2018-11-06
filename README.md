@@ -17,6 +17,7 @@ SteelConnect Manager is polled every 30 seconds.
 To install these: "pip3 install requests twilio steelconnection"
 
 ### Example of screen output using default settings
+```
 $ ./steelconnect_event_logger.py
 Connecting to xxx.riverbed.cc
 Successfully connected to xxx.riverbed.cc
@@ -34,3 +35,4 @@ Successfully connected to xxx.riverbed.cc
 2018-11-06 17:05:26: SYDNEY-LAB: 570-SD (XN00000000C0FF33) Uplink Uplink_Internet is now in use
 2018-11-06 17:05:26: SYDNEY-LAB: 570-SD (XN00000000C0FF33) Uplink Uplink_Internet came online
 2018-11-06 17:07:11: SYDNEY-LAB: 570-SD (XN00000000C0FF33) External IPv4 address change on Uplink Uplink_Internet (new IP 172.31.21.4)
+```
