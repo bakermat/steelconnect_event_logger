@@ -3,8 +3,8 @@ Monitor specific SCM events based on user preferences. Output sent to screen or 
 
 ## Getting Started
 USAGE:
-    1. Update config.ini with your SCM and (optionally) Twilio account settings.
-    2. Execute steelconnect_event_logger.py
+1) Update config.ini with your SCM and (optionally) Twilio account settings.
+2) Execute steelconnect_event_logger.py
 
 SteelConnect Manager is polled every 30 seconds.
 
