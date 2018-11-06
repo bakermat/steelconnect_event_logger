@@ -235,7 +235,7 @@ def get_offline_duration(node_detail, msg, timestamp, log=False):
 
 def check_if_in_messages(sc, messages_list, event_detail, node_details, log=True):
     """Send to log/text when event_detail.msg is in the messages_XXX list"""
-    if any(s.lower() in event_detail.msg for s in messages_list):
+    if any(s in event_detail.msg.lower() for s in messages_list):
         msg = find_and_replace_object_ids(event_detail.msg, sc)
         for node_detail in node_details:
             if node_detail.node_id == event_detail.node:
