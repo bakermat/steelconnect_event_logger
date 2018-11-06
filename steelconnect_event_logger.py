@@ -31,6 +31,7 @@ try:
     SCM_REALM = config['SCM']['REALM']
     SCM_USER = config['SCM']['USERNAME']
     SCM_PW = config['SCM']['PASSWORD']
+    SCM_RETRY_TIMER = int(config['SCM']['RETRY_TIMER'])
     TW_ACCOUNT_SID = config['TWILIO']['ACCOUNT_SID']
     TW_AUTH_TOKEN = config['TWILIO']['AUTH_TOKEN']
     TW_SENDER = config['TWILIO']['SENDER']
@@ -39,6 +40,9 @@ try:
     LOGLEVEL_CONSOLE = config['LOGGING']['LEVEL_CONSOLE']
 except KeyError:
     print("Error: Can't read config.ini file.")
+    sys.exit(0)
+except ValueError as e:
+    print("Incorrect value detected: " + str(e))
     sys.exit(0)
 
 # initialise global variables
@@ -67,8 +71,8 @@ def handle_error(function):
         try:
             return function(*args, **kwargs)
         except requests.exceptions.RequestException:
-            scm_logger.error("Error: can't connect to %s. Retrying in 30 seconds.", SCM_REALM)
-            time.sleep(30)
+            scm_logger.error("Error: can't connect to %s. Retrying in %s seconds.", SCM_REALM, SCM_RETRY_TIMER)
+            time.sleep(SCM_RETRY_TIMER)
             main()
         except steelconnection.exceptions.AuthenticationError:
             scm_logger.error("401 Error: Incorrect username or password for %s.", SCM_REALM)
@@ -282,8 +286,8 @@ def main():
                 check_if_in_messages(sc, messages_sms, event_detail, node_details, False)
                 check_if_in_messages(sc, messages_log, event_detail, node_details, True)
         last_check_event_id = most_recent_event_id
-        # wait 30 seconds, then do it again
-        time.sleep(30)
+        # wait X seconds, then do it again
+        time.sleep(SCM_RETRY_TIMER)
 
 
 def signal_handler(sig, frame):
