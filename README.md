@@ -1,9 +1,9 @@
 # steelconnect_event_logger
-Monitor specific SCM events based on user preferences. Output sent to screen or Twilio and log file.
+Monitor specific SCM events based on user preferences. Output sent to screen or Twilio or ServiceNow and log file.
 
 ## Getting Started
 USAGE:
-1) Update config.ini with your SCM and (optionally) Twilio account settings.
+1) Update config.ini with your SCM and (optionally) Twilio & ServiceNow account settings.
 2) Execute steelconnect_event_logger.py
 
 SteelConnect Manager is polled every 30 seconds.
@@ -15,6 +15,14 @@ SteelConnect Manager is polled every 30 seconds.
 - twilio
 
 To install these: "pip3 install requests twilio steelconnection"
+
+### Release Notes
+v1.1: 2019-04-10
+- Add support for ServiceNow incident creation
+- Made Twilio + ServiceNow integration optional
+- Minor bugfixes and code clean-up
+
+v1.0: 2018-11-07
 
 ### Example of screen output using default settings
 ```

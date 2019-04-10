@@ -1,5 +1,5 @@
 #!/usr/local/bin/python3
-""" Script to setup specific logging to file and text via Twilio
+""" Script to setup specific logging to file, Twilio or ServiceNow (v1.1)
 
 Requirements:
 - Python 3.6+
@@ -7,22 +7,25 @@ Requirements:
 - steelconnection
 - twilio
 
-To install these: "pip3 install requests twilio steelconnection"
-TODO:
-- look into args/kwargs for format_message ?
+Installation: "pip3 install requests twilio steelconnection"
+
 """
+
 import datetime
 import time
 import signal
 import sys
 import configparser
 import logging
+import json
 from logging.handlers import RotatingFileHandler
 from collections import namedtuple
 import re
 import requests
 import steelconnection
 from twilio.rest import Client
+
+scm_logger = logging.getLogger()
 
 # read and parse config from config.ini file
 config = configparser.ConfigParser()
@@ -32,17 +35,26 @@ try:
     SCM_USER = config['SCM']['USERNAME']
     SCM_PW = config['SCM']['PASSWORD']
     SCM_RETRY_TIMER = int(config['SCM']['RETRY_TIMER'])
+    ENABLE_TWILIO = int(config['SERVICES']['ENABLE_TWILIO'])
+    ENABLE_SERVICENOW = int(config['SERVICES']['ENABLE_SERVICENOW'])
     TW_ACCOUNT_SID = config['TWILIO']['ACCOUNT_SID']
     TW_AUTH_TOKEN = config['TWILIO']['AUTH_TOKEN']
     TW_SENDER = config['TWILIO']['SENDER']
     TW_RECEIVER = config['TWILIO']['RECEIVER']
+    SN_URL = config['SERVICENOW']['URL']
+    SN_USERNAME = config['SERVICENOW']['USERNAME']
+    SN_PASSWORD = config['SERVICENOW']['PASSWORD']
+    SN_CATEGORY = config['SERVICENOW']['CATEGORY']
+    SN_SUBCATEGORY = config['SERVICENOW']['SUBCATEGORY']
+    SN_CALLER_ID = config['SERVICENOW']['CALLER_ID']
+    SN_CONTACT_TYPE = config['SERVICENOW']['CONTACT_TYPE']
     LOGLEVEL_LOGFILE = config['LOGGING']['LEVEL_LOGFILE']
     LOGLEVEL_CONSOLE = config['LOGGING']['LEVEL_CONSOLE']
 except KeyError:
-    print("Error: Can't read config.ini file.")
+    scm_logger.error("Error: Can't read config.ini file.")
     sys.exit(0)
 except ValueError as e:
-    print("Incorrect value detected: " + str(e))
+    scm_logger.error(f"Incorrect value detected: {e}")
     sys.exit(0)
 
 # initialise global variables
@@ -51,7 +63,6 @@ messages_log = []
 messages_sms = []
 offline_timestamp = {}
 first_run = True
-scm_logger = logging.getLogger()
 # save values from config file in MESSAGES_xxx in lowercase for comparison
 for option, value in config.items('MESSAGES_LOG'):
     messages_log.append(value.lower())
@@ -62,7 +73,7 @@ for option, value in config.items('MESSAGES_SMS'):
 try:
     sc = steelconnection.SConnect(SCM_REALM, SCM_USER, SCM_PW)
 except Exception as error:
-    print(str(error))
+    scm_logger.error(error)
 
 
 def handle_error(function):
@@ -71,15 +82,17 @@ def handle_error(function):
         try:
             return function(*args, **kwargs)
         except requests.exceptions.RequestException:
-            scm_logger.error("Error: can't connect to %s. Retrying in %s seconds.", SCM_REALM, SCM_RETRY_TIMER)
+            scm_logger.error(f"Error: can't connect to {SCM_REALM}. Retrying in {SCM_RETRY_TIMER} seconds.")
             time.sleep(SCM_RETRY_TIMER)
             main()
         except steelconnection.exceptions.AuthenticationError:
-            scm_logger.error("401 Error: Incorrect username or password for %s.", SCM_REALM)
+            scm_logger.error(f"401 Error: Incorrect username or password for {SCM_REALM}")
             sys.exit(0)
         except steelconnection.exceptions.APINotEnabled:
-            scm_logger.error("502 Error: REST API is not enabled on %s.", SCM_REALM)
+            scm_logger.error(f"502 Error: REST API is not enabled on {SCM_REALM}.")
             sys.exit(0)
+        except Exception as e:
+            scm_logger.error(e)
     return handle_problems
 
 
@@ -98,7 +111,7 @@ def log_setup():
     console = logging.StreamHandler()
     console.setLevel(LOGLEVEL_CONSOLE.upper())
     # for console we only want message as we get timestamp from SCM event log
-    formatter = logging.Formatter("%(message)s")
+    formatter = logging.Formatter("%(asctime)s: %(message)s", "%Y-%m-%d %H:%M:%S")
     console.setFormatter(formatter)
     scm_logger.addHandler(console)
 
@@ -129,15 +142,16 @@ def get_node_details(sc, sites, nodes):
                 model = sc.lookup.model(node['model'])
                 serial = node['serial'] or 'shadow'
                 node_id = node['id']
+                location = node['location']
                 Node = namedtuple('Node', ['site_name', 'site_id', 'node_id',
-                                           'model', 'serial'])
-                node_details.extend([Node(site_name, site_id, node_id, model, serial)])
+                                           'location', 'model', 'serial'])
+                node_details.extend([Node(site_name, site_id, node_id, location, model, serial)])
     return node_details
 
 
 def print_to_log(msg, event):
     """Send info level message and debug event details to logger"""
-    scm_logger.debug("%s: ", str(event))
+    scm_logger.debug(f"{event}: ")
     scm_logger.info(msg)
 
 
@@ -170,8 +184,8 @@ def find_and_replace_object_ids(msg, sc):
     have multiple IDs in one message.
     """
     # using a dict as segment/zone call is different to the other ones
-    resource_types = {'uplink': 'uplink', 'port': 'port', 'site': 'site',
-                      'wan': 'wan', 'segment': 'zone'}
+    resource_types = {'uplink': 'uplink', 'dcuplink': 'dcuplink', 'port': 'port', 'site': 'site',
+                      'wan': 'wan', 'segment': 'zone', 'proxyservice': 'proxyservices'}
     for search_string, api_call in resource_types.items():
         if 'Deleted' not in msg:
             resource_id = re.findall(r'(?<=id )%s[^. ]*' % search_string, msg, flags=re.IGNORECASE)
@@ -185,13 +199,14 @@ def get_event_object(object_id, api_call, sc, message):
     if len(object_id) >= 1:
         for index, item in enumerate(object_id):
             try:
-                # workaround for SDI-5030: uses 'dcuplink' instead of 'uplink'
-                if 'dcuplink' in object_id[index]:
-                    resource = sc.get('dcuplink/' + object_id[index])
+                resource = sc.get(api_call + '/' + object_id[index])
+                if api_call == 'port':
+                    name = resource['tag']
+                elif api_call == 'proxyservices':
+                    name = resource['city']
                 else:
-                    resource = sc.get(api_call + '/' + object_id[index])
-                    name = resource['tag'] if api_call == 'port' else resource['name']
-                message = message.replace("ID "+item, name)
+                    name = resource['name']
+                message = message.replace("ID " + item, name)
             except steelconnection.exceptions.InvalidResource:
                 # happens when there's an event in a org you don't have permissions for. Ignore.
                 pass
@@ -205,20 +220,61 @@ def send_twilio_message(receiver, sender, body):
             TWILIO_CLIENT.messages.create(
                 to=receiver,
                 from_=sender,
-                body=body
-                )
+                body=body)
         except requests.exceptions.RequestException:
             scm_logger.error("Error communicating with Twilio API. Retrying.")
         else:
-            scm_logger.debug("SMS sent successfully: %s", body)
+            scm_logger.debug(f"SMS sent successfully: {body}.")
             break
     else:
         scm_logger.info("Couldn't connect to Twilio to send message.")
 
 
+def send_servicenow_message(node_detail, event_detail, body):
+    """Open ServiceNow incident"""
+    auth = SN_USERNAME, SN_PASSWORD
+    uri = f'{SN_URL}api/now/table/incident'
+
+    # define http headers for request
+    headers = {
+        "Accept": "application/json;charset=utf-8",
+        "Content-Type": "application/json"
+    }
+
+    # event_detail.severity = 0 for low prio events, so mapping that to ServiceNow severity 3
+    severity = 3 if event_detail.severity is 0 else event_detail.severity
+    if event_detail.severity is 0:
+        severity = 3
+    else:
+        severity = event_detail.severity
+
+    # define payload for request, note we are passing the sysparm_action variable in the body of the request
+    payload = {
+        'sysparm_action': 'insert',
+        'short_description': f'{event_detail.site_name}: {node_detail.location or node_detail.model} ({node_detail.serial}) {body}',
+        # following ones are optional
+        'category': SN_CATEGORY,
+        'subcategory': SN_SUBCATEGORY,
+        'contact_type': SN_CONTACT_TYPE,
+        'impact': severity,
+        'urgency': severity,
+        'description': f'{event_detail.time_formatted} {event_detail.site_name}: {node_detail.location or node_detail.model} ({node_detail.serial}) {body}',
+        'cmdb_ci': node_detail.serial,
+        'caller_id': SN_CALLER_ID,
+    }
+    try:
+        r = requests.post(url=uri, data=json.dumps(payload), auth=auth, headers=headers)
+        content = r.json()
+    except requests.exceptions.RequestException:
+        scm_logger.info(f'Code {str(r.status_code)}: Error {str(content)}')
+    else:
+        incident_uri = f'{SN_URL}nav_to.do?uri=incident.do?sys_id={content["result"]["sys_id"]}'
+        scm_logger.info(f'ServiceNow: Incident {content["result"]["number"]} created. URL: {incident_uri}')
+
+
 def format_message(date_str, node, msg):
     """Format log message"""
-    message = f"{date_str}: {node.site_name}: {node.model} ({node.serial}) {msg}"
+    message = f"{date_str}: {node.site_name}: {node.location or node.model} ({node.serial}) {msg}"
     return message
 
 
@@ -233,7 +289,7 @@ def get_offline_duration(node_detail, msg, timestamp, log=False):
             duration = datetime.timedelta(seconds=offline_total_time)
             if log:
                 del offline_timestamp[node_detail.node_id]
-            msg = msg + f". Offline for {duration}."
+            msg = f'{msg}. Offline for {duration}.'
     return msg
 
 
@@ -248,12 +304,15 @@ def check_if_in_messages(sc, messages_list, event_detail, node_details, log=True
                 if log:
                     print_to_log(message, event_detail)
                 else:
-                    send_twilio_message(TW_RECEIVER, TW_SENDER, message)
+                    if ENABLE_TWILIO:
+                        send_twilio_message(TW_RECEIVER, TW_SENDER, message)
+                    if ENABLE_SERVICENOW:
+                        send_servicenow_message(node_detail, event_detail, msg)
                 break
+            # this happens when no node details are available
             elif event_detail.node is None:
-                site_name = 'N/A' if event_detail.site_name is None else event_detail.site_name
-                # this happens when no node details are available
-                message = f"{event_detail.time_formatted}: {site_name}: {msg}"
+                site_name = '' if event_detail.site_name is None else f' {event_detail.site_name}:'
+                message = f'{event_detail.time_formatted}:{site_name} {msg}'
                 print_to_log(message, event_detail)
                 break
 
@@ -265,7 +324,7 @@ def main():
     if first_run:
         log_setup()
         scm_logger.debug("====== Starting application ======")
-        scm_logger.info("Connecting to %s", SCM_REALM)
+        scm_logger.info(f"Connecting to {SCM_REALM}")
 
     # last_check_event_id is used to compare against most recent event id
     last_check_event_id = -1
@@ -274,7 +333,7 @@ def main():
         nodes = get_items(sc, 'nodes')
         sites = get_items(sc, 'sites')
         if first_run:
-            scm_logger.info("Successfully connected to %s", SCM_REALM)
+            scm_logger.info(f"Successfully connected to {SCM_REALM}")
             first_run = False
         # for each site, go through nodes and save details in Node object
         node_details = get_node_details(sc, sites, nodes)
@@ -292,7 +351,7 @@ def main():
 
 def signal_handler(sig, frame):
     """Catch CTRL+C when exiting application for clean exit. """
-    scm_logger.info("\nCTRL+C pressed. Bye!")
+    scm_logger.info("CTRL+C pressed. Bye!")
     sys.exit(0)
 
 
