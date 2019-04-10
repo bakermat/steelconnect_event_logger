@@ -60,14 +60,14 @@ except ValueError as e:
 # initialise global variables
 TWILIO_CLIENT = Client(TW_ACCOUNT_SID, TW_AUTH_TOKEN)
 messages_log = []
-messages_sms = []
+messages_services = []
 offline_timestamp = {}
 first_run = True
 # save values from config file in MESSAGES_xxx in lowercase for comparison
 for option, value in config.items('MESSAGES_LOG'):
     messages_log.append(value.lower())
-for option, value in config.items('MESSAGES_SMS'):
-    messages_sms.append(value.lower())
+for option, value in config.items('MESSAGES_SERVICES'):
+    messages_services.append(value.lower())
 
 # Setup connection to SCM
 try:
@@ -342,7 +342,7 @@ def main():
         event_details = get_event_details(events, sites)
         for event_detail in event_details:
             if (event_detail.event_id > last_check_event_id) and (last_check_event_id is not -1):
-                check_if_in_messages(sc, messages_sms, event_detail, node_details, False)
+                check_if_in_messages(sc, messages_services, event_detail, node_details, False)
                 check_if_in_messages(sc, messages_log, event_detail, node_details, True)
         last_check_event_id = most_recent_event_id
         # wait X seconds, then do it again
