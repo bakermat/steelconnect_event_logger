@@ -23,6 +23,7 @@ v1.1: 2019-04-10
 - Minor bugfixes and code clean-up
 
 v1.0: 2018-11-07
+- Initial release
 
 ### Example of screen output using default settings
 ```
